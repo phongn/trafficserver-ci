@@ -1,0 +1,79 @@
+name: Build CI images
+
+# Builds the CI container images from their Dockerfiles so that breakage is
+# caught on the pull request that causes it. Nothing is pushed to the registry;
+# publishing the images remains a manual step for now.
+#
+# To cover another image, add it to the matrix below and add its directory to
+# both "paths" filters.
+
+on:
+  pull_request:
+    paths:
+      - 'docker/fedora44/**'
+      - 'docker/ubuntu2604/**'
+      - '.github/workflows/build-ci-images.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'docker/fedora44/**'
+      - 'docker/ubuntu2604/**'
+      - '.github/workflows/build-ci-images.yml'
+  # The images build packages from distribution mirrors and upstream git, so
+  # they can start failing without anything in this repository changing. A
+  # weekly run surfaces that drift rather than leaving it for the next PR.
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    strategy:
+      # One image failing should not hide the state of the others.
+      fail-fast: false
+      matrix:
+        image:
+          - fedora44
+          - ubuntu2604
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.image }}
+        env:
+          DOCKER_BUILDKIT: '1'
+        run: |
+          set -eux
+          docker build \
+            --pull \
+            --tag "ats/${{ matrix.image }}:${{ github.run_id }}" \
+            "docker/${{ matrix.image }}"
+
+      # A successful build still leaves room for an image that cannot run, so
+      # check the pieces every ATS job depends on.
+      - name: Smoke test ${{ matrix.image }}
+        run: |
+          set -eux
+          image="ats/${{ matrix.image }}:${{ github.run_id }}"
+          docker run --rm "${image}" id jenkins
+          docker run --rm "${image}" cmake --version
+          docker run --rm "${image}" git --version
+
+      - name: Report image size
+        if: always()
+        run: |
+          docker images "ats/${{ matrix.image }}"
+          df -h /
