@@ -294,3 +294,5 @@ RUN <<EOF
 EOF
 
 ENV PATH="$PATH:/opt/bin"
+
+# CI selection test: fedora44-only change, remove me
